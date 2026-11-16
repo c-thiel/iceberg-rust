@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * `iceberg_catalog_loader::BoxedCatalogBuilder` has a new required method, `with_runtime`. Types implementing `CatalogBuilder` get it through the blanket impl; types implementing `BoxedCatalogBuilder` directly (for example, a wrapper around another `Box<dyn BoxedCatalogBuilder>`) must implement it, typically by forwarding the runtime to the builder they wrap.
 * `Transaction::commit` now returns `ErrorKind::PreconditionFailed` for read-only tables (`Table::readonly()`, e.g. from `StaticTable::into_table` or `TableBuilder::readonly(true)`), including empty transactions, which previously returned the table unchanged. Java treats an empty transaction on a static table as a no-op.
 * `ArrowReader` reads nested struct fields as null for Parquet files that have neither field ids nor a name mapping, as iceberg-java does. Earlier versions returned their stored values by position. Tables migrated without field ids need a name mapping (`schema.name-mapping.default`) that covers nested fields to read them.
+* `ArrowReader` fails with `ErrorKind::DataInvalid` when a value does not fit the promoted column type, for example a `date` before 1677-09-22 or after 2262-04-11 promoted to `timestamp_ns`, as the spec requires. Earlier versions returned null for that value.
 
 ## [v0.10.1] - 2026-07-28
 

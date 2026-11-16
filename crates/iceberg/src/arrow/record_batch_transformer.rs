@@ -24,7 +24,7 @@ use arrow_array::{
     Array as ArrowArray, ArrayRef, Int32Array, Int64Array, ListArray, MapArray, RecordBatch,
     RecordBatchOptions, RunArray, StructArray,
 };
-use arrow_cast::cast;
+use arrow_cast::{CastOptions, cast, cast_with_options};
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
     SchemaRef,
@@ -454,7 +454,21 @@ impl PromotePlan {
     fn apply(&self, array: &ArrayRef) -> Result<ArrayRef> {
         match self {
             PromotePlan::PassThrough => Ok(Arc::clone(array)),
-            PromotePlan::Cast(target_type) => Ok(cast(array.as_ref(), target_type)?),
+            // A value the target type cannot hold fails the read, as the spec requires for
+            // promotions; the default cast would turn it into NULL.
+            PromotePlan::Cast(target_type) => {
+                cast_with_options(array.as_ref(), target_type, &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                })
+                .map_err(|e| {
+                    invalid_data!(
+                        "cannot promote a value from {} to {target_type}",
+                        array.data_type()
+                    )
+                    .with_source(e)
+                })
+            }
             PromotePlan::Struct { fields, children } => {
                 let source = array
                     .as_struct_opt()
@@ -1521,7 +1535,7 @@ mod test {
     };
     use arrow_buffer::{NullBuffer, OffsetBuffer};
     use arrow_cast::cast;
-    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
+    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
 
     use super::{field_with_id, schema_to_arrow_schema};
     use crate::ErrorKind;
@@ -2172,6 +2186,25 @@ mod test {
             None,
         );
         assert_eq!(out.as_list::<i32>(), &expected);
+    }
+
+    #[test]
+    fn promote_out_of_range_value_errors() {
+        // `date` 200000 is in the year 2517, after the last `timestamp_ns`.
+        let err = transform_top_level(
+            NestedField::optional(2, "d", Type::Primitive(PrimitiveType::TimestampNs)),
+            Arc::new(Date32Array::from(vec![18000, 200000])),
+        )
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!(
+                "cannot promote a value from {} to {}",
+                DataType::Date32,
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            )
+        );
     }
 
     #[test]
